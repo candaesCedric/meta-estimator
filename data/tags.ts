@@ -227,6 +227,10 @@ export const Tags: { [id: IDEntry]: TagData } = {
 		name: "DNU",
 		speciesFilter: species => species.doublesTier === '(DUU)',
 	},
+	// cp: {
+	// 	name: "Champion",
+	// 	speciesFilter: species => species.doublesTier === 'CP',
+	// },
 
 	// Nat Dex tiers
 	// -------------

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Champion Meta Viewer</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <main class="layout">
+    <header class="hero">
+      <h1>Champion Meta Viewer</h1>
+      <p>Visualisation des stats de simulation avec tri et recherche.</p>
+    </header>
+
+    <section class="panel controls">
+      <div class="control-group">
+        <button id="load-default">Charger stats.json par défaut</button>
+        <label class="file-input">
+          <input id="file-input" type="file" accept="application/json">
+          Charger un autre JSON
+        </label>
+      </div>
+      <div class="control-group">
+        <label>
+          Rechercher:
+          <input id="search" type="text" placeholder="Nom Pokémon ou team id">
+        </label>
+      </div>
+      <p id="status" class="status">Aucune donnée chargée.</p>
+    </section>
+
+    <section class="panel summary">
+      <h2>Résumé</h2>
+      <div id="summary-grid" class="summary-grid"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Pokémon</h2>
+      <div class="table-wrap">
+        <table id="pokemon-table">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Teams</h2>
+      <div class="table-wrap">
+        <table id="team-table">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>
