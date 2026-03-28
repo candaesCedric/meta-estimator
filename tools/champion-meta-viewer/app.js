@@ -4,6 +4,7 @@ const state = {
   raw: null,
   search: '',
   pokemonSort: { key: 'uses', dir: 'desc' },
+  itemSort: { key: 'uses', dir: 'desc' },
   teamSort: { key: 'score', dir: 'desc' },
 };
 
@@ -14,6 +15,7 @@ const refs = {
   search: document.getElementById('search'),
   summaryGrid: document.getElementById('summary-grid'),
   pokemonTable: document.getElementById('pokemon-table'),
+  itemTable: document.getElementById('item-table'),
   teamTable: document.getElementById('team-table'),
 };
 
@@ -32,6 +34,16 @@ const teamColumns = [
   { key: 'members', label: 'Members' },
   { key: 'uses', label: 'Uses', numeric: true },
   { key: 'score', label: 'Score', numeric: true },
+  { key: 'wins', label: 'Wins', numeric: true },
+  { key: 'losses', label: 'Losses', numeric: true },
+  { key: 'ties', label: 'Ties', numeric: true },
+  { key: 'winRate', label: 'Win Rate', numeric: true, percent: true },
+  { key: 'detail', label: 'Detail' },
+];
+
+const itemColumns = [
+  { key: 'name', label: 'Item' },
+  { key: 'uses', label: 'Uses', numeric: true },
   { key: 'wins', label: 'Wins', numeric: true },
   { key: 'losses', label: 'Losses', numeric: true },
   { key: 'ties', label: 'Ties', numeric: true },
@@ -96,7 +108,7 @@ function renderSummary() {
   )).join('');
 }
 
-function renderTable(table, rows, columns, sortState, onSort) {
+function renderTable(table, rows, columns, sortState, onSort, rowClassFn) {
   const sorted = sortRows(rows, sortState, columns);
 
   table.querySelector('thead').innerHTML = `
@@ -110,7 +122,7 @@ function renderTable(table, rows, columns, sortState, onSort) {
   `;
 
   table.querySelector('tbody').innerHTML = sorted.map(row => `
-    <tr>
+    <tr class="${rowClassFn ? (rowClassFn(row) || '') : ''}">
       ${columns.map(col => {
         const value = row[col.key];
         if (col.percent) return `<td>${safePercent(value)}</td>`;
@@ -152,6 +164,21 @@ function normalizeTeams(raw) {
     losses: t.losses || 0,
     ties: t.ties || 0,
     winRate: t.winRate || 0,
+    detail: Object.entries(t.pokemonScores || {})
+      .map(([name, value]) => `${name}: ${value.score || 0}`)
+      .join(' | '),
+  }));
+}
+
+function normalizeItems(raw) {
+  return Object.values(raw?.items || {}).map(i => ({
+    name: i.name,
+    uses: i.uses || 0,
+    wins: i.wins || 0,
+    losses: i.losses || 0,
+    ties: i.ties || 0,
+    winRate: i.winRate || 0,
+    id: i.id,
   }));
 }
 
@@ -159,6 +186,7 @@ function renderAll() {
   if (!state.raw) return;
 
   const pokemonRows = applySearch(normalizePokemon(state.raw));
+  const itemRows = applySearch(normalizeItems(state.raw));
   const teamRows = applySearch(normalizeTeams(state.raw));
 
   renderSummary();
@@ -166,9 +194,18 @@ function renderAll() {
     state.pokemonSort = toggleSort(state.pokemonSort, key);
     renderAll();
   });
+  renderTable(refs.itemTable, itemRows, itemColumns, state.itemSort, key => {
+    state.itemSort = toggleSort(state.itemSort, key);
+    renderAll();
+  });
   renderTable(refs.teamTable, teamRows, teamColumns, state.teamSort, key => {
     state.teamSort = toggleSort(state.teamSort, key);
     renderAll();
+  }, row => {
+    if ((row.uses || 0) <= 500) return '';
+    if ((row.winRate || 0) < 0.4) return 'wr-low';
+    if ((row.winRate || 0) > 0.6) return 'wr-high';
+    return '';
   });
 }
 

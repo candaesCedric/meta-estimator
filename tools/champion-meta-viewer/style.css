@@ -147,6 +147,14 @@ tr:hover td {
   background: #fcf9f2;
 }
 
+tr.wr-low td {
+  background: #ffe8e5;
+}
+
+tr.wr-high td {
+  background: #e6f8ea;
+}
+
 @media (max-width: 720px) {
   .layout { padding: 0.65rem; }
   .panel { padding: 0.65rem; }
