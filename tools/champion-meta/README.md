@@ -5,6 +5,7 @@ Mass AI-vs-AI battle runner for the custom Gen 9 `champion` format.
 ## What it does
 
 - Loads candidate species **only** from `data/available.json`
+- Applies format legality filters up front (species, moves, items, abilities)
 - Generates a persistent validated team pool (validation is done only on pool creation)
 - Runs async AI-vs-AI battles in loop
 - Persists cumulative team score + Pokemon usage/win stats in JSON files

@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const {toID} = require('./database-manager');
 
+const TEAM_LENGTH = 4;
 const SUPPORT_MOVES = new Set([
 	'protect', 'fakeout', 'helpinghand', 'tailwind', 'trickroom', 'wideguard', 'quickguard', 'followme', 'ragepowder',
 	'spore', 'icywind', 'electroweb', 'thunderwave', 'willowisp', 'snarl', 'partingshot', 'taunt', 'encore',
@@ -44,17 +45,21 @@ class TeamGenerator {
 		this.speciesPool = options.speciesPool;
 		this.megaChance = typeof options.megaChance === 'number' ? options.megaChance : 0.28;
 		this.maxAttempts = options.maxAttempts || 10000;
-		this.megaStoneMap = this.buildMegaStoneMap();
 		this.movePoolCache = new Map();
 		this.preferredCategoryCache = new Map();
 		this.topAbilityCache = new Map();
 		this.speciesAbilityIdCache = new Map();
+		this.legalMoveCache = new Map();
+		this.legalItemCache = new Map();
+		this.legalAbilityCache = new Map();
+		this.megaStoneMap = this.buildMegaStoneMap();
 	}
 
 	buildMegaStoneMap() {
 		const map = new Map();
 		for (const item of this.dex.items.all()) {
 			if (!item.exists || !item.megaStone) continue;
+			if (!this.isItemLegal(item.name)) continue;
 			for (const sourceName of Object.keys(item.megaStone)) {
 				const key = toID(sourceName);
 				if (!map.has(key)) map.set(key, []);
@@ -64,31 +69,73 @@ class TeamGenerator {
 		return map;
 	}
 
+	isMoveLegal(moveName) {
+		const move = this.dex.moves.get(moveName);
+		if (!move.exists || !move.id) return false;
+		if (this.legalMoveCache.has(move.id)) return this.legalMoveCache.get(move.id);
+		const probeSet = {name: 'Probe', species: 'Pikachu', item: '', ability: 'Static'};
+		const problem = this.validator.checkMove(probeSet, move, {});
+		const legal = !problem;
+		this.legalMoveCache.set(move.id, legal);
+		return legal;
+	}
+
+	isItemLegal(itemName) {
+		const item = this.dex.items.get(itemName);
+		if (!item.exists || !item.id) return false;
+		if (this.legalItemCache.has(item.id)) return this.legalItemCache.get(item.id);
+		const probeSet = {name: 'Probe', species: 'Pikachu', item: item.name, ability: 'Static'};
+		const problem = this.validator.checkItem(probeSet, item, {});
+		const legal = !problem;
+		this.legalItemCache.set(item.id, legal);
+		return legal;
+	}
+
+	isAbilityLegal(species, abilityName) {
+		const ability = this.dex.abilities.get(abilityName);
+		if (!ability.exists || !ability.id) return false;
+		const cacheKey = `${species.id}:${ability.id}`;
+		if (this.legalAbilityCache.has(cacheKey)) return this.legalAbilityCache.get(cacheKey);
+		const legalAbilityIds = new Set(Object.values(species.abilities).filter(Boolean).map(name => toID(name)));
+		if (!legalAbilityIds.has(ability.id)) {
+			this.legalAbilityCache.set(cacheKey, false);
+			return false;
+		}
+		const probeSet = {name: species.name, species: species.name, item: '', ability: ability.name};
+		const problem = this.validator.checkAbility(probeSet, ability, {});
+		const legal = !problem;
+		this.legalAbilityCache.set(cacheKey, legal);
+		return legal;
+	}
+
+	isGeneratedSetLegal(set) {
+		if (!set) return false;
+		const species = this.dex.species.get(set.species);
+		if (!species.exists) return false;
+		if (!this.isAbilityLegal(species, set.ability)) return false;
+		if (!this.isItemLegal(set.item)) return false;
+		return set.moves.every(moveName => this.isMoveLegal(moveName));
+	}
+
 	generatePool(targetSize, existingPool = []) {
 		const pool = [...existingPool];
 		const existingIds = new Set(pool.map(team => team.id));
 		let attempts = 0;
 		let generatedCount = 0;
-		let rejectedCount = 0;
+		let rejectedCount= {team: 0, strategic: 0, validation: 0};
 
 		while (pool.length < targetSize && attempts < this.maxAttempts) {
 			attempts += 1;
 			const team = this.generateTeamCandidate();
 			if (!team) {
-				rejectedCount += 1;
+				rejectedCount.team += 1;
 				continue;
 			}
 
-			if (!this.passesStrategicValidation(team)) {
-				rejectedCount += 1;
-				continue;
-			}
-
-			const validationErrors = this.validator.validateTeam(team);
-			if (validationErrors) {
-				rejectedCount += 1;
-				continue;
-			}
+			// if (!this.passesStrategicValidation(team)) {
+			// 	rejectedCount.strategic += 1;
+			// 	continue;
+			// }
 
 			const id = this.computeTeamId(team);
 			if (existingIds.has(id)) continue;
@@ -104,7 +151,7 @@ class TeamGenerator {
 	}
 
 	generateTeamCandidate() {
-		if (this.speciesPool.length < 6) return null;
+		if (this.speciesPool.length < TEAM_LENGTH) return null;
 		const shuffledSpecies = [...this.speciesPool];
 		this.prng.shuffle(shuffledSpecies);
 
@@ -114,7 +161,7 @@ class TeamGenerator {
 		let restrictedCount = 0;
 
 		for (const candidate of shuffledSpecies) {
-			if (team.length >= 6) break;
+			if (team.length >= TEAM_LENGTH) break;
 			if (usedSpecies.has(candidate.id)) continue;
 			if (candidate.isRestricted && restrictedCount >= 1) continue;
 
@@ -127,7 +174,7 @@ class TeamGenerator {
 			if (candidate.isRestricted) restrictedCount += 1;
 		}
 
-		if (team.length !== 6) return null;
+		if (team.length !== TEAM_LENGTH) return null;
 		if (!this.enforceVictreebelDrought(team, usedSpecies, usedItems)) return null;
 		return team;
 	}
@@ -143,7 +190,7 @@ class TeamGenerator {
 		if (movePool.length < 4) return null;
 
 		const forcedSet = this.buildForcedSet(species, movePool, usedItems);
-		if (forcedSet !== undefined) return forcedSet;
+		if (forcedSet !== undefined) return this.isGeneratedSetLegal(forcedSet) ? forcedSet : null;
 
 		const preferredCategory = this.getPreferredCategory(species);
 		const ability = this.pickAbility(species);
@@ -157,7 +204,7 @@ class TeamGenerator {
 		const evs = this.pickEVs(preferredCategory);
 		const teraType = this.pickTeraType(species, moves);
 
-		return {
+		const set = {
 			name: species.name,
 			species: species.name,
 			ability,
@@ -169,6 +216,7 @@ class TeamGenerator {
 			ivs: {hp: 31, atk: 31, def: 31, spa: 31, spd: 31, spe: 31},
 			moves: moves.map(move => move.name),
 		};
+		return this.isGeneratedSetLegal(set) ? set : null;
 	}
 
 	buildForcedSet(species, movePool, usedItems) {
@@ -230,6 +278,8 @@ class TeamGenerator {
 	}
 
 	buildConfiguredSet(species, movePool, config) {
+		if (!this.isAbilityLegal(species, config.ability)) return null;
+		if (!this.isItemLegal(config.item)) return null;
 		const preferredCategory = config.preferredCategory || this.getPreferredCategory(species);
 		const moves = this.pickMoves(species, movePool, preferredCategory, config.item);
 		if (moves.length < 4) return null;
@@ -254,6 +304,7 @@ class TeamGenerator {
 		for (const itemName of itemNames) {
 			const item = this.dex.items.get(itemName);
 			if (!item.exists) continue;
+			if (!this.isItemLegal(item.name)) continue;
 			if (usedItems.has(item.id)) continue;
 			return item.name;
 		}
@@ -617,6 +668,7 @@ class TeamGenerator {
 			const move = this.dex.moves.get(moveid);
 			if (!move.exists || !move.name) continue;
 			if (move.isNonstandard === 'Unobtainable') continue;
+			if (!this.isMoveLegal(move.name)) continue;
 			result.push(move);
 		}
 		const filtered = result.filter(move => !LOW_COHERENCE_MOVES.has(move.id));
@@ -641,7 +693,8 @@ class TeamGenerator {
 			const abilityNames = Object.values(species.abilities).filter(Boolean);
 			const abilities = abilityNames
 				.map(name => this.dex.abilities.get(name))
-				.filter(ability => ability.exists);
+				.filter(ability => ability.exists)
+				.filter(ability => this.isAbilityLegal(species, ability.name));
 			if (!abilities.length) return null;
 			abilities.sort((a, b) => (b.rating || 0) - (a.rating || 0));
 			const topRating = abilities[0].rating || 0;
@@ -674,6 +727,7 @@ class TeamGenerator {
 		for (const itemName of uniqueItems) {
 			const item = this.dex.items.get(itemName);
 			if (!item.exists) continue;
+			if (!this.isItemLegal(item.name)) continue;
 			if (usedItems.has(item.id)) continue;
 			return item.name;
 		}

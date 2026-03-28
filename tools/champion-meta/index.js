@@ -125,13 +125,13 @@ async function main() {
 	process.on('SIGINT', stopHandler);
 	process.on('SIGTERM', stopHandler);
 
-	const loader = new AvailableLoader({dex: Dex, availablePath});
+	const validator = TeamValidator.get(formatId);
+	const loader = new AvailableLoader({dex: Dex, availablePath, validator});
 	const speciesPool = loader.loadSpeciesPool();
-	if (speciesPool.length < 6) {
-		throw new Error(`available.json must provide at least 6 valid species (current: ${speciesPool.length}).`);
+	if (speciesPool.length < 4) {
+		throw new Error(`available.json must provide at least 4 valid species (current: ${speciesPool.length}).`);
 	}
 
-	const validator = TeamValidator.get(formatId);
 	const prng = PRNG.get(cli.values.seed || null);
 	const targetPoolSize = Math.max(2, getNumber(cli.values['pool-size'], 250));
 	let teamPool = db.teamPool;
@@ -150,7 +150,7 @@ async function main() {
 		const generation = generator.generatePool(targetPoolSize, teamPool);
 		teamPool = generation.pool;
 		db.saveTeamPool(teamPool);
-		console.log(`[pool] generated=${generation.generatedCount}, rejected=${generation.rejectedCount}, attempts=${generation.attempts}, total=${teamPool.length}`);
+		console.log(`[pool] generated=${generation.generatedCount}, rejected=${generation.rejectedCount.strategic}, validation=${generation.rejectedCount.validation}, team=${generation.rejectedCount.team}, attempts=${generation.attempts}, total=${teamPool.length}`);
 	} else {
 		console.log(`[pool] using persisted team pool (${teamPool.length} teams)`);
 	}
