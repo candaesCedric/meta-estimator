@@ -12,11 +12,12 @@ function printHelp() {
 	console.log('node tools/champion-meta/index.js [options]');
 	console.log('');
 	console.log('--format=champion           Battle format id (default: champion)');
-	console.log('--battles=5000              Number of AI vs AI battles to run');
+	console.log('--battles=5000              Number of AI vs AI battles to run (0 = pool only)');
 	console.log('--pool-size=300             Target amount of validated teams in team pool');
 	console.log('--concurrency=4             Number of async battle workers');
 	console.log('--report-every=100          Progress interval in battles');
 	console.log('--flush-every=25            Persist stats every N updates');
+	console.log('--retire-after=750          Retire teams after this many matches');
 	console.log('--seed=1,2,3,4              Seed for deterministic runs');
 	console.log('--mega-chance=0.28          Chance to assign a Mega stone in team generation');
 	console.log('--ai-move=0.9               Probability AI chooses move over switch');
@@ -24,6 +25,7 @@ function printHelp() {
 	console.log('--max-team-attempts=12000   Max attempts to fill missing teams in pool');
 	console.log('--db-dir=databases/champion-meta  Output directory for persisted files');
 	console.log('--available=data/available.json    Available species JSON path');
+	console.log('--reset-history             Remove old stats and team pool before run');
 	console.log('--skip-build                Skip `node build` before running');
 	console.log('--force-build               Force `node build` even if dist already exists');
 	console.log('--help                      Show this help');
@@ -58,6 +60,7 @@ async function main() {
 			concurrency: {type: 'string', default: '4'},
 			'report-every': {type: 'string', default: '100'},
 			'flush-every': {type: 'string', default: '25'},
+			'retire-after': {type: 'string', default: '750'},
 			seed: {type: 'string'},
 			'mega-chance': {type: 'string', default: '0.28'},
 			'ai-move': {type: 'string', default: '0.9'},
@@ -65,6 +68,7 @@ async function main() {
 			'max-team-attempts': {type: 'string', default: '12000'},
 			'db-dir': {type: 'string', default: 'databases/champion-meta'},
 			available: {type: 'string', default: 'data/available.json'},
+			'reset-history': {type: 'boolean', default: false},
 		},
 		strict: true,
 		allowPositionals: false,
@@ -98,6 +102,13 @@ async function main() {
 	const databaseDir = path.resolve(ROOT, getString(cli.values['db-dir'], 'databases/champion-meta'));
 	const teamPoolPath = path.join(databaseDir, 'team-pool.json');
 	const statsPath = path.join(databaseDir, 'stats.json');
+	const retireAfter = Math.max(1, getNumber(cli.values['retire-after'], 750));
+
+	if (cli.values['reset-history']) {
+		if (fs.existsSync(teamPoolPath)) fs.rmSync(teamPoolPath, {force: true});
+		if (fs.existsSync(statsPath)) fs.rmSync(statsPath, {force: true});
+		console.log('[reset] old stats and team pool removed');
+	}
 
 	const db = new DatabaseManager({
 		formatId,
@@ -148,37 +159,43 @@ async function main() {
 		throw new Error('Need at least two teams in the pool to run simulations.');
 	}
 
-	const totalBattles = Math.max(1, getNumber(cli.values.battles, 1000));
-	console.log(`[run] format=${formatId}, battles=${totalBattles}, concurrency=${getNumber(cli.values.concurrency, 4)}`);
+	const totalBattles = Math.max(0, getNumber(cli.values.battles, 1000));
+	if (totalBattles > 0) {
+		console.log(`[run] format=${formatId}, battles=${totalBattles}, concurrency=${getNumber(cli.values.concurrency, 4)}`);
 
-	const battleRunner = new BattleRunner({
-		formatId,
-		prng,
-		concurrency: getNumber(cli.values.concurrency, 4),
-		reportEvery: getNumber(cli.values['report-every'], 100),
-		aiMoveChance: getNumber(cli.values['ai-move'], 0.9),
-		aiMegaChance: getNumber(cli.values['ai-mega'], 0.6),
-	});
+		const battleRunner = new BattleRunner({
+			formatId,
+			prng,
+			concurrency: getNumber(cli.values.concurrency, 4),
+			reportEvery: getNumber(cli.values['report-every'], 100),
+			aiMoveChance: getNumber(cli.values['ai-move'], 0.9),
+			aiMegaChance: getNumber(cli.values['ai-mega'], 0.6),
+		});
 
-	const startedAt = Date.now();
-	const summary = await battleRunner.run({
-		battles: totalBattles,
-		teamPool,
-		onBattleResult: ({teamA, teamB, winner}) => {
-			db.recordBattle(teamA, teamB, winner);
-		},
-		onProgress: ({summary: progress}) => {
-			console.log(`[progress] done=${progress.completed}, p1=${progress.winsP1}, p2=${progress.winsP2}, ties=${progress.ties}, errors=${progress.errors}`);
-		},
-		onError: ({error, battleIndex}) => {
-			db.recordError();
-			console.error(`[error] battle=${battleIndex}: ${error.message}`);
-		},
-	});
+		const startedAt = Date.now();
+		const summary = await battleRunner.run({
+			battles: totalBattles,
+			teamPool,
+			isTeamEligible: team => !db.isTeamRetired(team.id, retireAfter),
+			onBattleResult: ({teamA, teamB, winner, activeParticipants}) => {
+				db.recordBattle(teamA, teamB, winner, activeParticipants);
+			},
+			onProgress: ({summary: progress}) => {
+				console.log(`[progress] done=${progress.completed}, p1=${progress.winsP1}, p2=${progress.winsP2}, ties=${progress.ties}, errors=${progress.errors}`);
+			},
+			onError: ({error, battleIndex}) => {
+				db.recordError();
+				console.error(`[error] battle=${battleIndex}: ${error.message}`);
+			},
+		});
 
-	db.flushIfNeeded(true);
-	const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
-	console.log(`[done] completed=${summary.completed}, errors=${summary.errors}, elapsed=${elapsedSec}s`);
+		db.flushIfNeeded(true);
+		const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
+		console.log(`[done] completed=${summary.completed}, errors=${summary.errors}, elapsed=${elapsedSec}s`);
+	} else {
+		db.flushIfNeeded(true);
+		console.log('[run] skipped battle simulation (battles=0)');
+	}
 	console.log(`[db] teamPool=${teamPoolPath}`);
 	console.log(`[db] stats=${statsPath}`);
 }

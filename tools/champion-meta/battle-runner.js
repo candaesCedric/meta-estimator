@@ -3,6 +3,10 @@
 const BattleStreams = require('../../dist/sim/battle-stream.js');
 const {RandomPlayerAI} = require('../../dist/sim/tools/random-player-ai.js');
 
+function toID(value) {
+	return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
 class BattleRunner {
 	constructor(options) {
 		this.formatId = options.formatId;
@@ -29,11 +33,48 @@ class BattleRunner {
 		return [teamPool[firstIndex], teamPool[secondIndex]];
 	}
 
+	teamHasTrickRoomSetter(team) {
+		return (team.team || []).some(set => (set.moves || []).some(move => toID(move) === 'trickroom'));
+	}
+
+	prepareTeamForBattle(team, opponentTeam) {
+		const mutableTeam = {...team, team: [...team.team]};
+		const torkoalIndex = mutableTeam.team.findIndex(set => toID(set.species) === 'torkoal');
+		if (torkoalIndex < 0) return mutableTeam;
+
+		const allyTrickRoom = mutableTeam.team.some((set, index) => (
+			index !== torkoalIndex && (set.moves || []).some(move => toID(move) === 'trickroom')
+		));
+		const opponentTrickRoom = this.teamHasTrickRoomSetter(opponentTeam);
+		const shouldIncludeTorkoal = allyTrickRoom || opponentTrickRoom;
+
+		if (shouldIncludeTorkoal && torkoalIndex >= 4) {
+			[mutableTeam.team[torkoalIndex], mutableTeam.team[0]] = [mutableTeam.team[0], mutableTeam.team[torkoalIndex]];
+		}
+		if (!shouldIncludeTorkoal && torkoalIndex < 4 && mutableTeam.team.length > 4) {
+			[mutableTeam.team[torkoalIndex], mutableTeam.team[4]] = [mutableTeam.team[4], mutableTeam.team[torkoalIndex]];
+		}
+
+		return mutableTeam;
+	}
+
+	registerActivePokemon(line, activeBySide) {
+		const parts = line.split('|');
+		if (parts.length < 4) return;
+		const sideToken = parts[2];
+		const side = sideToken.startsWith('p1') ? 'p1' : sideToken.startsWith('p2') ? 'p2' : null;
+		if (!side) return;
+		const speciesName = (parts[3] || '').split(',', 1)[0].trim();
+		if (!speciesName) return;
+		activeBySide[side].add(speciesName);
+	}
+
 	async runSingleBattle(teamA, teamB) {
 		const battleStream = new BattleStreams.BattleStream();
 		const streams = BattleStreams.getPlayerStreams(battleStream);
 		const p1Name = 'AI 1';
 		const p2Name = 'AI 2';
+		const activeBySide = {p1: new Set(), p2: new Set()};
 
 		const p1 = new RandomPlayerAI(streams.p1, {
 			seed: this.newSeed(),
@@ -57,6 +98,13 @@ class BattleRunner {
 
 		let winner = 'tie';
 		for await (const chunk of streams.omniscient) {
+			if (chunk.includes('|switch|') || chunk.includes('|drag|') || chunk.includes('|replace|')) {
+				for (const line of chunk.split('\n')) {
+					if (line.startsWith('|switch|') || line.startsWith('|drag|') || line.startsWith('|replace|')) {
+						this.registerActivePokemon(line, activeBySide);
+					}
+				}
+			}
 			if (chunk.includes('|tie|')) winner = 'tie';
 			const winIndex = chunk.lastIndexOf('|win|');
 			if (winIndex >= 0) {
@@ -66,7 +114,13 @@ class BattleRunner {
 			}
 		}
 		await streams.omniscient.writeEnd();
-		return winner;
+		return {
+			winner,
+			activeParticipants: {
+				p1: [...activeBySide.p1],
+				p2: [...activeBySide.p2],
+			},
+		};
 	}
 
 	async run(options) {
@@ -87,6 +141,12 @@ class BattleRunner {
 			ties: 0,
 		};
 
+		const isEligible = options.isTeamEligible || (() => true);
+		let eligibleTeams = teamPool.filter(isEligible);
+		if (eligibleTeams.length < 2) {
+			throw new Error('Not enough eligible teams to start battles.');
+		}
+
 		let nextBattleIndex = 0;
 		const workerCount = Math.min(this.concurrency, battles);
 		const workers = [];
@@ -96,17 +156,32 @@ class BattleRunner {
 					const battleIndex = nextBattleIndex;
 					nextBattleIndex += 1;
 					if (battleIndex >= battles) return;
+					if (eligibleTeams.length < 2) return;
 
-					const [teamA, teamB] = this.sampleTeams(teamPool);
+					const [teamA, teamB] = this.sampleTeams(eligibleTeams);
+					const preparedTeamA = this.prepareTeamForBattle(teamA, teamB);
+					const preparedTeamB = this.prepareTeamForBattle(teamB, teamA);
 					try {
-						const winner = await this.runSingleBattle(teamA, teamB);
+						const result = await this.runSingleBattle(preparedTeamA, preparedTeamB);
+						const winner = result.winner;
 						summary.completed += 1;
 						if (winner === 'p1') summary.winsP1 += 1;
 						if (winner === 'p2') summary.winsP2 += 1;
 						if (winner === 'tie') summary.ties += 1;
 
 						if (options.onBattleResult) {
-							options.onBattleResult({teamA, teamB, winner, battleIndex: battleIndex + 1, summary});
+							options.onBattleResult({
+								teamA,
+								teamB,
+								winner,
+								activeParticipants: result.activeParticipants,
+								battleIndex: battleIndex + 1,
+								summary,
+							});
+						}
+
+						if (!isEligible(teamA) || !isEligible(teamB)) {
+							eligibleTeams = eligibleTeams.filter(isEligible);
 						}
 						if (options.onProgress && summary.completed % this.reportEvery === 0) {
 							options.onProgress({battleIndex: battleIndex + 1, summary});

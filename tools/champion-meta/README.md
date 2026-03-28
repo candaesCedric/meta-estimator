@@ -23,6 +23,12 @@ Mass AI-vs-AI battle runner for the custom Gen 9 `champion` format.
 node tools/champion-meta/index.js --battles=5000 --pool-size=300 --concurrency=4
 ```
 
+Build team pool only (no battles):
+
+```bash
+node tools/champion-meta/index.js --reset-history --pool-size=50000 --battles=0 --max-team-attempts=2000000
+```
+
 By default, persisted data is written to:
 
 - `databases/champion-meta/team-pool.json`
