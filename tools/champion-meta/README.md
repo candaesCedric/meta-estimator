@@ -29,6 +29,26 @@ Build team pool only (no battles):
 node tools/champion-meta/index.js --reset-history --pool-size=50000 --battles=0 --max-team-attempts=2000000
 ```
 
+## Docker (VPS)
+
+Build image from project root:
+
+```bash
+docker build -t champion-meta .
+```
+
+Run simulation with persistent stats/team pool:
+
+```bash
+docker run --rm \
+  -e CHAMPION_POOL_SIZE=50000 \
+  -e CHAMPION_BATTLES=1000000 \
+  -e CHAMPION_CONCURRENCY=8 \
+  -e CHAMPION_EXTRA_ARGS="--reset-history --max-team-attempts=2000000" \
+  -v "$(pwd)/databases/champion-meta:/app/databases/champion-meta" \
+  champion-meta
+```
+
 By default, persisted data is written to:
 
 - `databases/champion-meta/team-pool.json`
