@@ -21,6 +21,21 @@ const DEFAULT_ITEM_POOL = [
 	'Rocky Helmet', 'Clear Amulet', 'Choice Scarf', 'Choice Band', 'Choice Specs', 'Expert Belt',
 ];
 
+const REQUIRED_CORE_TYPES = ['Fire', 'Water', 'Grass'];
+
+const METAGROSS_MOVE_WEIGHTS = [
+	{ name: 'Psychic Fangs', chance: 1.0 },
+	{ name: 'Bullet Punch', chance: 0.778 },
+	{ name: 'Protect', chance: 0.472 },
+	{ name: 'Meteor Mash', chance: 0.333 },
+	{ name: 'Earthquake', chance: 0.25 },
+	{ name: 'Iron Head', chance: 0.25 },
+	{ name: 'Knock Off', chance: 0.25 },
+	{ name: 'Hammer Arm', chance: 0.222 },
+	{ name: 'Hard Press', chance: 0.167 },
+	{ name: 'Stomping Tantrum', chance: 0.167 },
+];
+
 class TeamGenerator {
 	constructor(options) {
 		this.dex = options.dex;
@@ -118,7 +133,10 @@ class TeamGenerator {
 	}
 
 	buildPokemonSet(candidate, usedItems) {
-		const species = this.dex.species.get(candidate.name);
+		let species = this.dex.species.get(candidate.name);
+		if (species.id === 'ninetales') {
+			species = this.dex.species.get('Ninetales-Alola');
+		}
 		if (!species.exists) return null;
 
 		const movePool = this.getMovePool(species);
@@ -185,6 +203,29 @@ class TeamGenerator {
 				preferredCategory: 'Physical',
 			});
 		}
+		if (species.id === 'pikachu') {
+			const item = this.dex.items.get('Light Ball');
+			if (!item.exists || usedItems.has(item.id)) return null;
+			return this.buildConfiguredSet(species, movePool, {
+				ability: this.pickAbility(species),
+				item: item.name,
+			});
+		}
+		if (species.id === 'metagross') {
+			return this.buildMetagrossSet(species, movePool, usedItems);
+		}
+		if (species.id === 'incineroar') {
+			return this.buildIncineroarSet(species, movePool, usedItems);
+		}
+		if (species.id === 'raichu' || species.id === 'raichualola') {
+			return this.buildRaichuSet(species, movePool, usedItems);
+		}
+		if (species.id === 'maushold' || species.id === 'mausholdfour') {
+			return this.buildMausholdSet(species, movePool, usedItems);
+		}
+		if (species.id === 'chesnaught') {
+			return this.buildChesnaughtSet(species, movePool, usedItems);
+		}
 		return undefined;
 	}
 
@@ -205,6 +246,199 @@ class TeamGenerator {
 			teraType,
 			evs: config.evs || this.pickEVs(preferredCategory),
 			ivs,
+			moves: moves.map(move => move.name),
+		};
+	}
+
+	pickSpecificItem(itemNames, usedItems) {
+		for (const itemName of itemNames) {
+			const item = this.dex.items.get(itemName);
+			if (!item.exists) continue;
+			if (usedItems.has(item.id)) continue;
+			return item.name;
+		}
+		return null;
+	}
+
+	fillMoves(baseMoves, movePool, preferredCategory, itemName, bannedMoveIds = new Set()) {
+		const moveMap = new Map(movePool.map(move => [move.id, move]));
+		const chosen = [];
+		const chosenIds = new Set();
+		for (const moveName of baseMoves) {
+			const move = moveMap.get(toID(moveName));
+			if (!move) continue;
+			if (bannedMoveIds.has(move.id)) continue;
+			if (chosenIds.has(move.id)) continue;
+			chosen.push(move);
+			chosenIds.add(move.id);
+		}
+
+		const allowStatus = toID(itemName) !== 'assaultvest';
+		const fallback = movePool
+			.filter(move => !chosenIds.has(move.id))
+			.filter(move => !bannedMoveIds.has(move.id))
+			.filter(move => allowStatus || move.category !== 'Status')
+			.sort((a, b) => this.rankMove(b, preferredCategory) - this.rankMove(a, preferredCategory));
+		for (const move of fallback) {
+			if (chosen.length >= 4) break;
+			chosen.push(move);
+			chosenIds.add(move.id);
+		}
+		return chosen.slice(0, 4);
+	}
+
+	chooseWeightedMoves(movePool, weightedMoves, preferredCategory, itemName, bannedMoveIds = new Set()) {
+		const moveMap = new Map(movePool.map(move => [move.id, move]));
+		const chosen = [];
+		const chosenIds = new Set();
+		const allowStatus = toID(itemName) !== 'assaultvest';
+		for (const entry of weightedMoves) {
+			const move = moveMap.get(toID(entry.name));
+			if (!move) continue;
+			if (bannedMoveIds.has(move.id)) continue;
+			if (!allowStatus && move.category === 'Status') continue;
+			if (chosenIds.has(move.id)) continue;
+			if (entry.chance >= 1 || this.prng.random() < entry.chance) {
+				chosen.push(move);
+				chosenIds.add(move.id);
+			}
+		}
+
+		const fallback = movePool
+			.filter(move => !chosenIds.has(move.id))
+			.filter(move => !bannedMoveIds.has(move.id))
+			.filter(move => allowStatus || move.category !== 'Status')
+			.sort((a, b) => this.rankMove(b, preferredCategory) - this.rankMove(a, preferredCategory));
+		for (const move of fallback) {
+			if (chosen.length >= 4) break;
+			chosen.push(move);
+			chosenIds.add(move.id);
+		}
+		return chosen.slice(0, 4);
+	}
+
+	buildMetagrossSet(species, movePool, usedItems) {
+		const megaItem = this.pickForcedMegaItem(species, usedItems);
+		const itemChoices = ['Assault Vest', 'Weakness Policy', 'X Accuracy'];
+		if (megaItem) itemChoices.push(megaItem);
+		const item = this.pickSpecificItem(itemChoices, usedItems);
+		if (!item) return null;
+
+		const moves = this.chooseWeightedMoves(movePool, METAGROSS_MOVE_WEIGHTS, 'Physical', item);
+		if (moves.length < 4) return null;
+		const teraType = this.pickTeraType(species, moves);
+		return {
+			name: species.name,
+			species: species.name,
+			ability: 'Clear Body',
+			item,
+			nature: 'Adamant',
+			level: 50,
+			teraType,
+			evs: {hp: 4, atk: 252, def: 0, spa: 0, spd: 0, spe: 252},
+			ivs: {hp: 31, atk: 31, def: 31, spa: 31, spd: 31, spe: 31},
+			moves: moves.map(move => move.name),
+		};
+	}
+
+	buildIncineroarSet(species, movePool, usedItems) {
+		const item = this.pickItem(species, 'Physical', usedItems);
+		if (!item) return null;
+		const moves = this.fillMoves(
+			['Fake Out', 'Flare Blitz', 'Parting Shot', 'Protect'],
+			movePool,
+			'Physical',
+			item,
+			new Set(['knockoff'])
+		);
+		if (moves.length < 4 || !moves.some(move => move.id === 'fakeout')) return null;
+		const teraType = this.pickTeraType(species, moves);
+		return {
+			name: species.name,
+			species: species.name,
+			ability: 'Intimidate',
+			item,
+			nature: 'Adamant',
+			level: 50,
+			teraType,
+			evs: {hp: 4, atk: 252, def: 0, spa: 0, spd: 0, spe: 252},
+			ivs: {hp: 31, atk: 31, def: 31, spa: 31, spd: 31, spe: 31},
+			moves: moves.map(move => move.name),
+		};
+	}
+
+	buildRaichuSet(species, movePool, usedItems) {
+		const megaKey = toID(species.baseSpecies || species.name);
+		const megaChoices = this.megaStoneMap.get(megaKey) || [];
+		const freeMegaChoices = megaChoices.filter(item => !usedItems.has(item.id));
+		if (!freeMegaChoices.length) return null;
+		const megaItem = this.prng.sample(freeMegaChoices);
+		const moves = this.pickMoves(species, movePool, this.getPreferredCategory(species), megaItem.name);
+		if (moves.length < 4) return null;
+		const teraType = this.pickTeraType(species, moves);
+		return {
+			name: species.name,
+			species: species.name,
+			ability: this.pickAbility(species),
+			item: megaItem.name,
+			nature: this.pickNature(species, this.getPreferredCategory(species)),
+			level: 50,
+			teraType,
+			evs: this.pickEVs(this.getPreferredCategory(species)),
+			ivs: {hp: 31, atk: 31, def: 31, spa: 31, spd: 31, spe: 31},
+			moves: moves.map(move => move.name),
+		};
+	}
+
+	buildMausholdSet(species, movePool, usedItems) {
+		const item = this.pickItem(species, 'Physical', usedItems);
+		if (!item) return null;
+		const moves = this.fillMoves(
+			['Follow Me', 'Population Bomb', 'Protect', 'Helping Hand'],
+			movePool,
+			'Physical',
+			item
+		);
+		if (moves.length < 4) return null;
+		const allowedAbilities = ['Friend Guard', 'Technician'];
+		const legalAbilities = allowedAbilities.filter(name => this.dex.abilities.get(name).exists);
+		const ability = legalAbilities.length ? this.prng.sample(legalAbilities) : this.pickAbility(species);
+		const teraType = this.pickTeraType(species, moves);
+		return {
+			name: species.name,
+			species: species.name,
+			ability,
+			item,
+			nature: 'Jolly',
+			level: 50,
+			teraType,
+			evs: {hp: 4, atk: 252, def: 0, spa: 0, spd: 0, spe: 252},
+			ivs: {hp: 31, atk: 31, def: 31, spa: 31, spd: 31, spe: 31},
+			moves: moves.map(move => move.name),
+		};
+	}
+
+	buildChesnaughtSet(species, movePool, usedItems) {
+		const item = this.pickForcedMegaItem(species, usedItems);
+		if (!item) return null;
+		const moves = this.fillMoves(
+			['Feint', 'Wide Guard', 'Spiky Shield', 'Body Press'],
+			movePool,
+			'Physical',
+			item
+		);
+		if (moves.length < 4) return null;
+		const teraType = this.pickTeraType(species, moves);
+		return {
+			name: species.name,
+			species: species.name,
+			ability: 'Bulletproof',
+			item,
+			nature: 'Impish',
+			level: 50,
+			teraType,
+			evs: {hp: 252, atk: 0, def: 252, spa: 0, spd: 4, spe: 0},
+			ivs: {hp: 31, atk: 31, def: 31, spa: 31, spd: 31, spe: 31},
 			moves: moves.map(move => move.name),
 		};
 	}
@@ -268,6 +502,10 @@ class TeamGenerator {
 		return team.map(set => ({
 			speciesId: toID(set.species),
 			abilityId: toID(set.ability),
+			itemName: set.item,
+			itemId: toID(set.item),
+			teraType: set.teraType,
+			baseTypes: this.dex.species.get(set.species).types || [],
 			moveIds: set.moves.map(move => toID(move)),
 		}));
 	}
@@ -307,16 +545,46 @@ class TeamGenerator {
 		const hasVictreebel = normalizedTeam.some(set => set.speciesId === 'victreebel');
 		if (hasVictreebel && !weather.drought) return false;
 
+		const baseTypes = new Set(normalizedTeam.flatMap(set => set.baseTypes));
+		const teraTypes = new Set(normalizedTeam.map(set => set.teraType));
+		for (const type of REQUIRED_CORE_TYPES) {
+			if (!baseTypes.has(type) && !teraTypes.has(type)) return false;
+		}
+
 		for (const set of normalizedTeam) {
 			const ability = set.abilityId;
 			const moves = set.moveIds;
+			const isMegaMeganium = this.isMegaMeganiumSet(set);
 
-			if (moves.includes('solarbeam') && !weather.sun) return false;
-			if (moves.includes('weatherball') && !weather.any) return false;
+			if ((moves.includes('solarbeam') || moves.includes('weatherball') || moves.includes('synthesis')) &&
+				!weather.sun && !isMegaMeganium) return false;
 			if (ability === 'swiftswim' && !weather.rain) return false;
 			if ((moves.includes('hurricane') || moves.includes('thunder')) && !weather.rain) return false;
+
+			if ((set.speciesId === 'raichu' || set.speciesId === 'raichualola') && this.isLevitateRaichuMegaSet(set)) {
+				const hasEarthquakeAlly = normalizedTeam.some(ally => ally !== set && ally.moveIds.includes('earthquake'));
+				if (!hasEarthquakeAlly) return false;
+			}
 		}
 		return true;
+	}
+
+	isMegaMeganiumSet(set) {
+		if (set.speciesId !== 'meganium') return false;
+		const item = this.dex.items.get(set.itemName);
+		if (!item.exists || !item.megaStone) return false;
+		return item.megaStone['Meganium'] === 'Meganium-Mega';
+	}
+
+	isLevitateRaichuMegaSet(set) {
+		if (set.speciesId !== 'raichu' && set.speciesId !== 'raichualola') return false;
+		const item = this.dex.items.get(set.itemName);
+		if (!item.exists || !item.megaStone) return false;
+		const megaSpeciesName = item.megaStone['Raichu'] || item.megaStone['Raichu-Alola'];
+		if (!megaSpeciesName) return false;
+		const megaSpecies = this.dex.species.get(megaSpeciesName);
+		const megaAbilityIds = Object.values(megaSpecies.abilities).map(ability => toID(ability));
+		return megaAbilityIds.includes('levitate');
 	}
 
 	getMovePool(species) {
